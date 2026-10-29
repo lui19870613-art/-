@@ -29,8 +29,12 @@ var CFG = {
     SHOP_CARD_W: [380, 440],      // SHOP_FREE_X を使うカード幅の範囲
     STROKE_PX: 2,                 // 白フチ（第3-2節）
     GLOW: true, GLOW_CHOKE: 1, GLOW_SIZE: 2,
-    JPEG_QUALITY: 12
+    JPEG_QUALITY: 12,
+    // 日付の置き方："ask"＝起動時に聞く / "standard"＝2行（第2〜4章） / "oneline"＝日付だけ1行で元の位置（第9章の例外）
+    // ※ kk_ranking_zipperpuller は帯の重なりが大きく2行が入らないため "oneline" を選ぶ（2026-10-29 決定）
+    LAYOUT: "ask"
 };
+var ONELINE = false;
 
 var WD = ["日", "月", "火", "水", "木", "金", "土"];
 var LOG = [];
@@ -242,7 +246,12 @@ function processBanner(file) {
             var txt = l.textItem.contents;
             if (txt.indexOf("集計期間") >= 0) { period = l; continue; }
             var p = parseDate(txt);
-            if (p) dates.push({ layer: l, p: p, orig: textRect(l), wasHidden: !l.visible, old: txt });
+            if (p) {
+                // すぐ下のレイヤー（所属カードの第一候補）を、動かす前に記録しておく
+                var sib = l.parent.layers, below = null;
+                for (var q = 0; q < sib.length - 1; q++) if (sib[q] == l) { below = sib[q + 1]; break; }
+                dates.push({ layer: l, p: p, orig: textRect(l), wasHidden: !l.visible, old: txt, below: below });
+            }
         } else if (l.kind == LayerKind.NORMAL && l.visible) {
             var r = rectOf(l.bounds), w = r.r - r.l, h = r.b - r.t;
             if (w >= CFG.CARD_W[0] && w <= CFG.CARD_W[1] && h < CFG.CARD_H_MAX) cards.push({ layer: l, r: r, z: i });
@@ -260,8 +269,9 @@ function processBanner(file) {
         try { D.layer.unlink(); } catch (e) {}                    // 動かす前に必ずリンク解除
         if (D.wasHidden) D.layer.visible = true;                  // 隠れた日付は表示（第4-6節）
         D.lines = formatLines(D.p);
+        if (ONELINE) D.lines = [D.lines[1]];                      // 日付だけの1行
         styleText(D.layer, D.lines, size, false);
-        moveTo(D.layer, D.orig.l, D.orig.t - CFG.MOVE_UP);
+        moveTo(D.layer, D.orig.l, D.orig.t - (ONELINE ? 0 : CFG.MOVE_UP));
         if (front) {
             var parent = D.layer.parent;
             if (parent.layers[0] != D.layer) D.layer.move(parent.layers[0], ElementPlacement.PLACEBEFORE);
@@ -271,10 +281,16 @@ function processBanner(file) {
     // カードの割り当てと、見えている範囲（手前のカードに隠れない範囲）の計算（第4章）
     for (i = 0; i < dates.length; i++) {
         D = dates[i];
-        var tr = textRect(D.layer), best = null, bestA = 0;
+        var tr = D.orig, best = null, bestA = 0;
+        // すぐ下のレイヤーが重なるカードなら、それが所属カード（重なった帯では面積だけだと誤判定するため）
         for (var c = 0; c < cards.length; c++) {
-            var a = overlap(tr, cards[c].r);
-            if (a > bestA) { bestA = a; best = cards[c]; }
+            if (cards[c].layer == D.below && overlap(tr, cards[c].r) > 0) best = cards[c];
+        }
+        if (!best) {
+            for (c = 0; c < cards.length; c++) {
+                var a = overlap(tr, cards[c].r);
+                if (a > bestA) { bestA = a; best = cards[c]; }
+            }
         }
         if (!best) {                                              // 対応カードなし → 非表示（削除しない）
             D.layer.visible = false; D.noCard = true;
@@ -297,6 +313,15 @@ function processBanner(file) {
             if (o.z >= best.z || !overlap(o.r, cr)) continue;
             if (o.r.l > x0 && o.r.t < box.b && o.r.b > box.t) box.r = Math.min(box.r, o.r.l - 3);          // 右側を覆うカード
         }
+        if (ONELINE) {                                            // 元の日付の行（ショップ名の下〜帯の下端）
+            x0 = D.orig.l;
+            box = { l: x0, t: D.orig.t - 3, r: cr.r - CFG.MARGIN, b: cr.b - 2 };
+            for (c = 0; c < cards.length; c++) {
+                o = cards[c];
+                if (o.z >= best.z) continue;
+                if (o.r.l > x0 && o.r.t < box.b && o.r.b > box.t && o.r.r > x0) box.r = Math.min(box.r, o.r.l - 2);
+            }
+        }
         D.box = box; D.x0 = x0;
     }
 
@@ -312,8 +337,8 @@ function processBanner(file) {
         return true;
     }
     var s = size;
-    while (s > CFG.MIN_SIZE && !fits(s, false)) s -= 0.5;
-    if (!fits(s, false)) {                                        // 第9章：1行にまとめる例外
+    while (s > CFG.MIN_SIZE && !fits(s, false)) s -= (ONELINE ? 0.25 : 0.5);
+    if (!ONELINE && !fits(s, false)) {                                        // 第9章：1行にまとめる例外
         var s1 = size;
         while (s1 > CFG.MIN_SIZE && !fits(s1, true)) s1 -= 0.5;
         if (fits(s1, true) && s1 > s) { s = s1; oneLine = true; }
@@ -333,7 +358,7 @@ function processBanner(file) {
         if (D.noCard) continue;
         var r2 = textRect(D.layer), tw = r2.r - r2.l, th = r2.b - r2.t;
         var L = Math.max(D.x0, Math.min(D.orig.l, D.box.r - tw));
-        var T = D.orig.t - CFG.MOVE_UP;
+        var T = D.orig.t - (ONELINE ? 0 : CFG.MOVE_UP);
         T = Math.max(D.box.t, Math.min(T, D.box.b - th));
         moveTo(D.layer, L, T);
         var fxNote = applyEffects(D.layer);
@@ -437,6 +462,13 @@ function main() {
         }
     }
     if (!files.length) { alert("001で終わるPSDが見つかりません"); return; }
+    if (CFG.LAYOUT == "ask") {
+        ONELINE = confirm("日付の置き方を選んでください。\n\n［はい］日付だけを1行にして、元の日付の位置（ショップ名の下）に置く\n　　　（帯の重なりが大きいバナー向け。zipperpuller はこちら）\n［いいえ］標準の2行（リアルタイムランキング＋日付）");
+    } else ONELINE = (CFG.LAYOUT == "oneline");
+    if (ONELINE) {                                                // 小さい文字では2pxのフチがにじむため細くする（第3-2節の注意）
+        CFG.STROKE_PX = 1; CFG.GLOW_CHOKE = 0; CFG.GLOW_SIZE = 1;
+        log("置き方：日付だけ1行・元の位置（第9章の例外）");
+    } else log("置き方：標準の2行");
     if (app.documents.length && !confirm("開いているドキュメントをすべて閉じてから作業します（未保存のものは保存するか聞かれます）。よろしいですか？")) return;
 
     var oldRuler = app.preferences.rulerUnits, oldType = app.preferences.typeUnits;
