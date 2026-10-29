@@ -214,8 +214,11 @@ function run(file, count) {
 }
 
 function main() {
-    var file = File.openDialog("帯の枚数を減らすPSDを選んでください", "*.psd");
-    if (!file) return;
+    alert("スクリプトが始まりました。\n［OK］を押すとファイルを選ぶ画面が出ます。\n帯を減らしたいPSDを選んでください。");
+    // Windows と Mac でファイルの絞り込みの書き方が違う
+    var filter = ($.os.indexOf("Windows") >= 0) ? "Photoshop ファイル:*.psd" : function (f) { return f instanceof Folder || /\.psd$/i.test(f.name); };
+    var file = File.openDialog("帯の枚数を減らすPSDを選んでください", filter);
+    if (!file) { alert("ファイルが選ばれなかったので終了します。"); return; }
     var ans = prompt("残す帯の枚数", String(CFG.COUNT));
     if (ans === null) return;
     var count = parseInt(ans, 10);
@@ -232,4 +235,4 @@ function main() {
         alert(LOG.join("\n"));
     }
 }
-main();
+try { main(); } catch (e) { alert("エラーで止まりました：\n" + e.message + (e.line ? "（" + e.line + "行目）" : "")); }
