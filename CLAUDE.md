@@ -71,6 +71,13 @@ cd <スクラッチパッド> && apt-get update && apt-get download fonts-noto-c
   `set_text`（文字の書き換え）・`replace_layer` を使う。画像化して新しいレイヤーに描き直す方法（文字が編集できなくなる）は使わない。
   JPEG と埋め込みプレビューは `save_with_preview` で、元ファイルの Photoshop 描画をもとに変えた部分だけ描き直したものを入れる。
   new001 は帯・日付・集計期間を編集できるまま、new002 は「20」の文字・メダル20個（「メダル 01」〜のグループ）を編集できるまま納品済み。
+  ※ psd-tools の `PixelLayer.frompil` は RGB モードの PSD だと透明を「黒い四角＋レイヤーマスク」にしてしまう（Photoshop で文字を打ち直すとマスクで欠ける）。
+    `editable.new_pixel_layer` を使う（透明チャンネルで保存）。過去の出力で壊れているレイヤーは `editable.repair(psd)` で直す（直したら保存して読み直す）。
+- 日付の入れ替え：`tools/cloud_fallback/dates_shift.py <元.psd> <出力.psd> <出力.jpg> <フォントdir> "YYYY/MM/DD HH:MM" ...`
+  新しい日付を足した数だけ古い日付を消し、左の列の下→上、右の列の下→上の順に古い順で並べ直す（右上がいちばん新しい）。
+  文字レイヤーの中身だけ書き換え、集計期間も直す。新しい日付の絵は Noto Sans の仮描き（Photoshop で文字を編集すると小塚ゴシックになる）。
+  2026-10-30：new001 に「2026/09/16 03:53」を2件追加（部門名は入れず、ほかと同じ「リアルタイムランキング／日付」の形）、2023/9/18 の2件を削除。
+  集計期間は「2023年10月9日～2026年9月16日」。
 
 ## 20冠の決まった形（2026-10-30 ユーザー指定・次からこの形にする）
 - 見本：`docs/reference/usbportcover_typec_ranking_new002_20冠見本.psd`（ユーザーが Photoshop で作ったもの。見た目は同じ名前の .jpg）。

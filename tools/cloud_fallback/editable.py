@@ -11,13 +11,29 @@
 import copy
 from PIL import Image
 from psd_tools.api.layers import PixelLayer
-from psd_tools.constants import Tag
+from psd_tools.constants import Tag, Compression, ChannelID
+
+
+def new_pixel_layer(psd, img, left, top, append=True):
+    """透明な部分を「透明チャンネル」として持つ画像レイヤーを作る。
+    psd-tools の frompil は RGB モードの PSD だと透明を「黒い四角＋レイヤーマスク」にしてしまい、
+    Photoshop で文字を打ち直したときにマスクで欠けるので使わない。"""
+    img = img.convert('RGBA')
+    rec, chans = PixelLayer._build_layer_record_and_channels(
+        img, 'tmp', left, top, Compression.RLE,
+        version=psd._record.header.version, depth=psd._record.header.depth)
+    ids = [c.id for c in rec.channel_info]
+    assert ChannelID.TRANSPARENCY_MASK in ids and ChannelID.USER_LAYER_MASK not in ids, ids
+    nl = PixelLayer(psd, rec, chans)
+    if append:
+        psd.append(nl)
+    return nl
 
 
 def replace_layer(psd, old, img, left, top, parent=None):
     """old を、img を絵にした新しいレイヤーに置き換える（設定は old のまま）。新しいレイヤーを返す。"""
     parent = parent or old.parent
-    nl = PixelLayer.frompil(img, psd, 'tmp', top, left)
+    nl = new_pixel_layer(psd, img, left, top, append=False)
     rec, orec = nl._record, old._record
     rec.tagged_blocks = copy.deepcopy(orec.tagged_blocks)      # 文字・効果・名前・ID などを引き継ぐ
     rec.name = orec.name
@@ -29,8 +45,43 @@ def replace_layer(psd, old, img, left, top, parent=None):
     return nl
 
 
-def scaled_image(layer, s):
+def true_pixels(layer):
+    """レイヤーの絵を、透明を正しく持った RGBA で返す。
+    以前の psd-tools の出力で「黒い四角＋レイヤーマスク」になっているものは、マスクを透明に戻す。"""
     im = layer.topil()
+    if im is None:
+        return None
+    im = im.convert('RGBA')
+    if layer.has_mask() and im.getchannel('A').getextrema() == (255, 255):
+        m = layer.mask
+        alpha = Image.new('L', im.size, m.background_color)
+        mi = m.topil()
+        if mi is not None:
+            alpha.paste(mi.convert('L'), (m.left - layer.left, m.top - layer.top))
+        im.putalpha(alpha)
+    return im
+
+
+def is_broken(layer):
+    """「黒い四角＋レイヤーマスク」になっているレイヤーか。"""
+    if layer.is_group() or not layer.has_mask():
+        return False
+    im = layer.topil()
+    return im is not None and im.convert('RGBA').getchannel('A').getextrema() == (255, 255)
+
+
+def repair(psd):
+    """「黒い四角＋レイヤーマスク」になったレイヤーを、透明チャンネルを持つ元の形に直す。直した数を返す。"""
+    n = 0
+    for l in list(psd.descendants()):
+        if is_broken(l):
+            replace_layer(psd, l, true_pixels(l), l.left, l.top)
+            n += 1
+    return n
+
+
+def scaled_image(layer, s):
+    im = true_pixels(layer)
     if im is None:
         return None
     im = im.convert('RGBA')
@@ -57,18 +108,31 @@ def move_scale(psd, layer, s, ox, oy, nx, ny):
 
 
 def set_text(layer, text):
-    """文字レイヤーの文字を書き換える（1つの書式だけの文字に対応）。絵は別に replace_layer で差し替えること。"""
+    """文字レイヤーの文字を書き換える。書式は1種類、段落は「行ごとに1つ」または「全体で1つ」の文字に対応。
+    改行は '\r'。絵は別に replace_layer で差し替えること。"""
     ts = layer.tagged_blocks.get_data(Tag.TYPE_TOOL_OBJECT_SETTING)
     td = ts.text_data
     td[b'Txt '].value = text + '\x00'
     e = td[b'EngineData'].value['EngineDict']
     e['Editor']['Text'].value = text + '\r'
-    n = len(text) + 1
-    for run in ('StyleRun', 'ParagraphRun'):
-        arr = e[run]['RunLengthArray']
-        if len(arr) != 1:
-            raise ValueError(f'{run} が複数あるため書き換えできません')
-        arr[0] = type(arr[0])(n) if not isinstance(arr[0], int) else n
+    total = len(text) + 1
+    lines = text.split('\r')
+
+    def setlen(arr, values):
+        for i, v in enumerate(values):
+            arr[i] = type(arr[i])(v) if not isinstance(arr[i], int) else v
+
+    arr = e['StyleRun']['RunLengthArray']
+    if len(arr) != 1:
+        raise ValueError('書式（StyleRun）が複数あるため書き換えできません')
+    setlen(arr, [total])
+    arr = e['ParagraphRun']['RunLengthArray']
+    if len(arr) == 1:
+        setlen(arr, [total])
+    elif len(arr) == len(lines):
+        setlen(arr, [len(t) + 1 for t in lines])          # 各行の文字数＋改行
+    else:
+        raise ValueError(f'段落の数（{len(arr)}）と行の数（{len(lines)}）が合いません')
 
 
 def save_with_preview(psd, path, preview):
