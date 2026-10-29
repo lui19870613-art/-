@@ -2,12 +2,13 @@
 usbportcover_typec_ranking_new002 用に作成（30冠・10個×3段 → 20冠・10個×2段）。
 
 使い方:
-  python3 -I medals_to_n.py <元.psd> <出力.psd> <出力.jpg> [新しい数字=20]
+  python3 -I medals_to_n.py <元.psd> <出力.psd> <出力.jpg> [新しい数字=20] [各段の個数 例 6,7,7]
 
 - 数字：元の「30」の画像から「0」をそのまま使い、「2」だけ InterDisplay-Black で描く（白・黒い影 11px/127°）。
   元の文字レイヤーは非表示で残す。
-- メダル：いちばん下の段を削除し、残った段を白い帯の中で上下中央へ移動する。
-  文字レイヤーは画像化せず、位置（レイヤー位置＋文字の変形情報）だけ動かすので、Photoshop で編集できるまま。
+- メダル：残す個数になるよう下の段から減らし、メダル1個分（土台・星・文字）を効果ごと1枚の画像にして、
+  白い帯に収まる最大の大きさで並べ直す（各段は左右中央）。元のメダルのレイヤーは削除する。
+  ※ psd-tools で既存レイヤーを動かすと Photoshop で崩れるおそれがあるため、既存レイヤーは動かさず新しいレイヤーで置く。
 """
 import sys, math
 import numpy as np
@@ -98,18 +99,54 @@ for i in sorted(rows_):
 assert total == target, f'段ごとに消すと {total} 個になる'
 drop = [l for i in rows_ if i not in keep_rows for l in rows_[i]]
 keep = [l for i in keep_rows for l in rows_[i]]
-y0 = min(l.top for l in keep); y1 = max(l.bottom for l in keep)
-area_top, area_bot = band.top, psd.height
-shift = round((area_top + area_bot) / 2 - (y0 + y1) / 2)
-print(f'メダル {total} 個を残し、{len(drop)} レイヤーを削除。{shift}px 下へ移動')
+# 並べ方（各段の個数。例 "6,7,7"。指定がなければ元と同じ1段の個数で並べる）
+ROWS = [int(x) for x in (sys.argv[5] if len(sys.argv) > 5 else '').split(',') if x] or None
 
-for l in drop:
-    psd.remove(l)
+# メダル1個分のレイヤーをまとめる（土台「レイヤー 25*」に、中心がいちばん近いレイヤーを割り当てる）
+bases = [l for l in keep if l.kind == 'pixel' and l.name.startswith('レイヤー 25')]
+groups = {b.layer_id: [] for b in bases}
 for l in keep:
-    if l.kind == 'type':                              # 文字の変形情報も同じだけ動かす（Photoshopで再描画しても同じ位置）
-        ts = l.tagged_blocks.get_data(Tag.TYPE_TOOL_OBJECT_SETTING)
-        t = list(ts.transform); t[5] += shift; ts.transform = tuple(t)
-    l.offset = (l.left, l.top + shift)
+    cx, cy = (l.left + l.right) / 2, (l.top + l.bottom) / 2
+    b = min(bases, key=lambda b: ((b.left + b.right) / 2 - cx) ** 2 + ((b.top + b.bottom) / 2 - cy) ** 2)
+    assert b.left - 15 <= cx <= b.right + 15 and b.top - 15 <= cy <= b.bottom + 15, f'メダルに入らないレイヤー：{l.name}'
+    groups[b.layer_id].append(l)
+order = sorted(bases, key=lambda b: (row(b), b.left))   # 元の並び順（上の段の左から）
+
+# 1個ずつ、効果ごと1枚の画像にする（文字も一緒に拡大されるので隠れない）
+medals = []
+for b in order:
+    ids = {l.layer_id for l in groups[b.layer_id]}
+    im = psd.composite(layer_filter=lambda l, ids=ids: l.layer_id in ids and l.is_visible(), color=0.0, alpha=0.0)
+    im = im.convert('RGBA'); bb = im.getbbox()
+    medals.append(im.crop(bb))
+uw = max(m.width for m in medals); uh = max(m.height for m in medals)
+ROWS = ROWS or [medal_rows[i] for i in keep_rows]
+assert sum(ROWS) == len(medals), f'並べ方の合計 {sum(ROWS)} とメダル数 {len(medals)} が違う'
+
+area_top, area_bot = band.top, psd.height
+SIDE, MIN_GAP = 15, 8
+nmax, nrow = max(ROWS), len(ROWS)
+sc = min((psd.width - SIDE * 2) / (nmax * uw), (area_bot - area_top - MIN_GAP * (nrow + 1)) / (nrow * uh))
+cw, ch = uw * sc, uh * sc
+gx = (psd.width - SIDE * 2 - nmax * cw) / max(1, nmax - 1)     # 横のすき間（全段同じ）
+gy = (area_bot - area_top - nrow * ch) / (nrow + 1)            # 縦のすき間（上下と段の間で同じ）
+print(f'並べ方 {ROWS}・拡大 {sc * 100:.1f}%（メダル {round(cw)}×{round(ch)}px）')
+
+for l in parts:                                               # 元のメダル（全段）を削除
+    psd.remove(l)
+k = 0
+for r, n in enumerate(ROWS):
+    roww = n * cw + (n - 1) * gx
+    x0 = (psd.width - roww) / 2
+    y = area_top + gy + r * (ch + gy)
+    for j in range(n):
+        m = medals[k]
+        m2 = m.resize((round(m.width * sc), round(m.height * sc)), Image.LANCZOS)
+        cx = x0 + j * (cw + gx) + cw / 2; cy = y + ch / 2      # 枠の中央に置く
+        nl = PixelLayer.frompil(m2, psd, 'medal', round(cy - m2.height / 2), round(cx - m2.width / 2))
+        k += 1
+        nl.name = f'メダル {k:02d}'
+        psd.append(nl)
 
 psd.save(out_psd)
 PSDImage.open(out_psd).composite(force=True).convert('RGB').save(out_jpg, quality=95, subsampling=0)
