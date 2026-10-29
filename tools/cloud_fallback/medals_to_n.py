@@ -115,9 +115,26 @@ order = sorted(bases, key=lambda b: (row(b), b.left))   # 元の並び順（上�
 # 1個ずつ、効果ごと1枚の画像にする（文字も一緒に拡大されるので隠れない）
 medals = []
 for b in order:
-    ids = {l.layer_id for l in groups[b.layer_id]}
-    im = psd.composite(layer_filter=lambda l, ids=ids: l.layer_id in ids and l.is_visible(), color=0.0, alpha=0.0)
-    im = im.convert('RGBA'); bb = im.getbbox()
+    im = Image.new('RGBA', psd.size, (0, 0, 0, 0))
+    for l in sorted(groups[b.layer_id], key=L.index):         # 下のレイヤーから順に重ねる
+        if not l.is_visible():
+            continue
+        li = l.composite()
+        if li is None:
+            continue
+        li = li.convert('RGBA')
+        for e in (l.effects if l.has_effects() else []):
+            # psd-tools はドロップシャドウを描かないので自分で描く（メダル土台と下の文字の「黒い部分」）
+            if type(e).__name__ == 'DropShadow' and e.enabled:
+                ang = math.radians(e.angle)
+                dx, dy = round(-math.cos(ang) * e.distance), round(math.sin(ang) * e.distance)
+                c = e.color
+                col = tuple(round(c.get(k, 0)) for k in (b'Rd  ', b'Grn ', b'Bl  '))
+                a = li.getchannel('A').point(lambda v, o=e.opacity: round(v * o / 100))
+                sh = Image.new('RGBA', li.size, col + (0,)); sh.putalpha(a)
+                im.alpha_composite(sh, (l.left + dx, l.top + dy))
+        im.alpha_composite(li, (l.left, l.top))
+    bb = im.getbbox()
     medals.append(im.crop(bb))
 uw = max(m.width for m in medals); uh = max(m.height for m in medals)
 ROWS = ROWS or [medal_rows[i] for i in keep_rows]
