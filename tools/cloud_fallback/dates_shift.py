@@ -2,7 +2,8 @@
 あとで Photoshop で手を加えられる PSD を作る（日付・集計期間は文字レイヤーのまま、効果も元のまま）。
 
 使い方:
-  python3 -I dates_shift.py <元.psd> <出力.psd> <出力.jpg> <フォントdir> "2026/09/16 03:53" ["2026/09/16 03:53" ...]
+  python3 -I dates_shift.py <元.psd> <出力.psd> <出力.jpg> <フォントdir> "2026/09/16 03:53" ["2026/09/16 03:53" ...] [--redraw-all]
+  （新しい日付なしで --redraw-all だけ付けると、並び・中身はそのままで全件の絵を描き直す）
 
 - 並び順：左の列の下から上へ、続いて右の列の下から上へ、古い順。右上がいちばん新しい日付。
 - 足した数だけ、いちばん古い日付を消す。
@@ -19,7 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from editable import replace_layer, set_text, save_with_preview, repair, true_pixels
 
 src, out_psd, out_jpg, fontdir = sys.argv[1:5]
-NEW = sys.argv[5:]
+# --redraw-all : 元の日付の絵も使わず、全件を今の大きさで描き直す（拡大した絵はぼやけるため）
+REDRAW = '--redraw-all' in sys.argv
+NEW = [a for a in sys.argv[5:] if not a.startswith('--')]
 BOLD = fontdir + '/NotoSansCJK-Bold.ttc'
 REG = fontdir + '/NotoSansCJK-Regular.ttc'
 SS = 4
@@ -103,8 +106,8 @@ def render(text):
 
 
 for e in entries:
-    e['img'] = by_text[e['text']] if e['text'] in by_text else render(e['text'])
-    e['drawn'] = e['text'] not in by_text
+    e['drawn'] = REDRAW or e['text'] not in by_text
+    e['img'] = render(e['text']) if e['drawn'] else by_text[e['text']]
 
 # 集計期間
 mn, mx = entries[0]['dt'], entries[-1]['dt']
