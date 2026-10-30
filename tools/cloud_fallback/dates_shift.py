@@ -4,6 +4,7 @@
 使い方:
   python3 -I dates_shift.py <元.psd> <出力.psd> <出力.jpg> <フォントdir> "2026/09/16 03:53" ["2026/09/16 03:53" ...] [--redraw-all]
   （新しい日付なしで --redraw-all だけ付けると、並び・中身はそのままで全件の絵を描き直す）
+  [--remove="YYYY/MM/DD HH:MM"] でその日付を1件消す（足した数と消した数が同じなら、ほかの古い日付は消さない）
 
 - 並び順：左の列の下から上へ、続いて右の列の下から上へ、古い順。右上がいちばん新しい日付。
 - 足した数だけ、いちばん古い日付を消す。
@@ -23,6 +24,8 @@ src, out_psd, out_jpg, fontdir = sys.argv[1:5]
 # --redraw-all : 元の日付の絵も使わず、全件を今の大きさで描き直す（拡大した絵はぼやけるため）
 REDRAW = '--redraw-all' in sys.argv
 NEW = [a for a in sys.argv[5:] if not a.startswith('--')]
+# --remove=YYYY/MM/DD HH:MM : その日付を1件消す（同じ日付が2件あるときなど。何回でも指定できる）
+REMOVE = [a.split('=', 1)[1] for a in sys.argv[5:] if a.startswith('--remove=')]
 BOLD = fontdir + '/NotoSansCJK-Bold.ttc'
 REG = fontdir + '/NotoSansCJK-Regular.ttc'
 SS = 4
@@ -79,7 +82,14 @@ for s_ in NEW:
     dt, ht = parse(s_)
     entries.append({'dt': dt, 'time': ht, 'text': fmt(dt, ht), 'src': None})
 entries.sort(key=lambda e: e['dt'])
-removed = entries[:len(entries) - len(positions)]
+removed = []
+for r in REMOVE:
+    dt, _ = parse(r)
+    hit = next((e for e in reversed(entries) if e['dt'] == dt), None)
+    assert hit, f'消す日付が見つかりません：{r}'
+    entries.remove(hit); removed.append(hit)
+assert len(entries) >= len(positions), f'日付が {len(entries)} 件で、帯 {len(positions)} 枚に足りません'
+removed += entries[:len(entries) - len(positions)]
 entries = entries[len(entries) - len(positions):]
 for e in removed:
     print('消す：', e['text'].replace('\r', ' '))
